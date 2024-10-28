@@ -36,7 +36,7 @@ import uuid
 
 import yaml
 
-from utils.logger.delete_empty_log_files import delete_empty_log_files, delete_zone_identifier_files
+from .utils.logger.delete_empty_log_files import delete_empty_log_files, delete_zone_identifier_files
 
 def make_id():
     return str(uuid.uuid4())
@@ -66,7 +66,7 @@ try:
     FORCE_DEFAULT_LOG_LEVEL_FOR_WHOLE_PROGRAM: bool = config['LOGGER']['FORCE_DEFAULT_LOG_LEVEL_FOR_WHOLE_PROGRAM']
     print(f"DEFAULT_LOG_LEVEL set to '{DEFAULT_LOG_LEVEL}'\nFORCE_DEFAULT_LOG_LEVEL_FOR_WHOLE_PROGRAM set to {FORCE_DEFAULT_LOG_LEVEL_FOR_WHOLE_PROGRAM}")
 except ModuleNotFoundError as e:
-    print("")
+    print(f"Module Not Found: {e}")
 except Exception as e:
     # Automatically run the entire program in debug mode if we lack configs.
     DEFAULT_LOG_LEVEL = logging.DEBUG
