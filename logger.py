@@ -31,42 +31,40 @@ Note: This module requires the 'yaml' package for configuration file parsing.
 from datetime import datetime
 import logging
 import os
+import signal
+import sys
 import time
+from typing import Callable
 import uuid
+
 
 import yaml
 
-from utils.logger.delete_empty_log_files import delete_empty_log_files, delete_zone_identifier_files
+
+from .utils.logger.delete_empty_log_files import delete_empty_log_files, delete_zone_identifier_files
 
 def make_id():
     return str(uuid.uuid4())
 
 # Define general folder for log files
-# Define hard-coded constants
-
-# Define paths
 script_dir = os.path.dirname(os.path.realpath(__file__))
-PROGRAM_NAME = PROJECT_ROOT = script_dir = os.path.dirname(script_dir)
-config_path = os.path.join(PROJECT_ROOT, 'config', 'config.yaml')
+PROJECT_ROOT = PROGRAM_NAME = os.path.dirname(script_dir)
 debug_log_folder = os.path.join(PROJECT_ROOT, "debug_logs")
 
-if not os.path.exists(config_path):
-    print(f"Could not find config.yaml at '{config_path}'. Using default logger config yaml 'logger_config.yaml'.")
-    config_path = os.path.join(script_dir, 'logger_config.yaml')
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Could not find 'config.yaml' or 'logger_config.yaml' in program files")
+# Import DEBUG config
+# We do a separate yaml import to avoid circular imports with the config file.
 
-# We do a separate yaml import to avoid circular imports with the config module.
+config_path = os.path.join(PROJECT_ROOT, 'config.yaml')
 try:
     delete_empty_log_files(debug_log_folder)
-    delete_zone_identifier_files(PROJECT_ROOT)
+    delete_zone_identifier_files(script_dir)
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
-    DEFAULT_LOG_LEVEL = config['LOGGER']['DEFAULT_LOG_LEVEL']
-    FORCE_DEFAULT_LOG_LEVEL_FOR_WHOLE_PROGRAM: bool = config['LOGGER']['FORCE_DEFAULT_LOG_LEVEL_FOR_WHOLE_PROGRAM']
-    print(f"DEFAULT_LOG_LEVEL set to '{DEFAULT_LOG_LEVEL}'\nFORCE_DEFAULT_LOG_LEVEL_FOR_WHOLE_PROGRAM set to {FORCE_DEFAULT_LOG_LEVEL_FOR_WHOLE_PROGRAM}")
+    DEFAULT_LOG_LEVEL = config['SYSTEM']['DEFAULT_LOG_LEVEL']
+    FORCE_DEFAULT_LOG_LEVEL_FOR_WHOLE_PROGRAM: bool = config['SYSTEM']['FORCE_DEFAULT_LOG_LEVEL_FOR_WHOLE_PROGRAM']
+    print(f"DEFAULT_LOG_LEVEL set to {DEFAULT_LOG_LEVEL}\nFORCE_DEFAULT_LOG_LEVEL_FOR_WHOLE_PROGRAM set to {FORCE_DEFAULT_LOG_LEVEL_FOR_WHOLE_PROGRAM}")
 except ModuleNotFoundError as e:
-    print("")
+    print("ModuleNotFoundError when opening config.yaml")
 except Exception as e:
     # Automatically run the entire program in debug mode if we lack configs.
     DEFAULT_LOG_LEVEL = logging.DEBUG
@@ -144,12 +142,18 @@ class Logger:
         self.logger_folder = debug_log_folder
         self.log_level = log_level if not FORCE_DEFAULT_LOG_LEVEL_FOR_WHOLE_PROGRAM else DEFAULT_LOG_LEVEL
         self.stacklevel = stacklevel
-        self.logger = None
+        self.logger: logging.Logger = None
         self.filename = None
         self.filepath = None
+        self.file_handler = None
         # Formating variables.
         self.asterisk = "\n********************\n"
         self.line = "\n--------------------\n"
+        self.exception_symbol = None
+        # Register signal handlers
+        # This make it so log files are written even when the program errors or is stopped.
+        self._setup_signal_handlers()
+        self.shutting_down = False # Keep track of shutdown status
 
         # Create the specified log folder if it doesn't exist.
         # This assures that we always have a valid path for the log file.
@@ -178,7 +182,7 @@ class Logger:
                 self.stacklevel = self.stacklevel or 2
 
         # Create the logger itself.
-        self.logger.setLevel(self.log_level)
+        self.logger.setLevel(self.log_level) # Set the default log level.
         self.logger.propagate = False # Prevent logs from being handled by parent loggers
 
         if not self.logger.handlers:
@@ -199,77 +203,133 @@ class Logger:
             self.logger.addHandler(file_handler)
             self.logger.addHandler(console_handler)
 
-    def info(self, message, f: bool=False, q: bool=True, t: float=None, off: bool=False):
+    def _setup_signal_handlers(self):
         """
-        f is for formatting with self.asterisk.\n
-        q is for automatically putting single quotes around f-string curly brackets.\n
-        t is for pausing the program by a specified number of seconds after the message has been printed to console.
-        off turns off the logger for this message.
+        Register the signal handlers.
+        These will be called in case of forced shutdowns and keyboard interrupts.
         """
+        signal.signal(signal.SIGINT, self._handle_shutdown_signal)
+        signal.signal(signal.SIGTERM, self._handle_shutdown_signal)
+
+    def _handle_shutdown_signal(self, signum: int, frame) -> None:
+        """
+        Handle shutdown signals gracefully
+        """
+        if self.shutting_down:
+            self.logger.warning("Received second shutdown signal! Forcing exit...")
+            sys.exit(1)
+            
+        self.shutting_down = True
+        signal_name = signal.Signals(signum).name
         
-        if not off:
-            if not f:
-                self.logger.info(message, stacklevel=self.stacklevel)
-            else:
-                self.logger.info(f"{self.asterisk}{message}{self.asterisk}", stacklevel=self.stacklevel)
-            if t:
-                time.sleep(t)
+        self.logger.info(f"Received shutdown signal: {signal_name}")
+        self.logger.info("Starting graceful shutdown...")
+        
+        try:
+            self._cleanup()
+        except Exception as e:
+            self.logger.error(f"Error during cleanup: {e}")
+            sys.exit(1)
+            
+        self.logger.info("Graceful shutdown completed")
+        sys.exit(0)
 
-    def debug(self, message, f: bool=False, q: bool=True, t: float=None, off: bool=False):
+    def _cleanup(self, signum: int, frame) -> None:
+        """
+        Cleanup logging resources on exit.
+        """
+        for handler in self.logger.handlers:
+            handler.flush()
+        logging.shutdown()
+
+    def _f(self, message: str) -> str:
+        """
+        Format the message with a line of asterisks above and below it.
+        The number of asterisks will have the same length as the input message, 
+        with a maximum character length of 100.
+        """
+        self.asterisk = '*' * len(message)
+        # Cut off the asterisk string at 50 characters to prevent wasted log space.
+        self.asterisk = self.asterisk[:100] if len(message) > 100 else self.asterisk 
+        return f"\n{self.asterisk}\n{message}\n{self.asterisk}\n"
+
+    def _message_template(self, message: str, method: Callable, f: bool, q: bool, t: float, off: bool) -> None:
         """
         f is for formatting with self.asterisk.\n
-        q is for automatically putting single quotes around f-string curly brackets.\n
-        t is for pausing the program by a specified number of seconds after the message has been printed to console.
+        q is for automatically putting single quotes around f-string curly brackets
+        t is for pausing the program by a specified number of seconds after the message has been printed to console.\n
         off turns off the logger for this message.
+        NOTE q is deprecated due to Python's inability to tell the difference between a regular and formatted string at runtime.
         """
         if not off:
-            if not f:
-                self.logger.debug(message, stacklevel=self.stacklevel)
+            if not f: # We move up the stack by 1 because it's a nested method.
+                method(message, stacklevel=self.stacklevel+1)
             else:
-                self.logger.debug(f"{self.asterisk}{message}{self.asterisk}", stacklevel=self.stacklevel)
+                method(self._f(message), stacklevel=self.stacklevel+1)
             if t:
                 time.sleep(t)
 
-    def warning(self, message, f: bool=False, q: bool=True, t: float=None, off: bool=False):
+    def info(self, message, f: bool=False, q: bool=True, t: float=None, off: bool=False) -> None:
         """
         f is for formatting with self.asterisk.\n
         q is for automatically putting single quotes around f-string curly brackets
-        NOTE f, t, and off are not implemented for this method. They are only there to prevent programmer errors.
+        t is for pausing the program by a specified number of seconds after the message has been printed to console.\n
+        off turns off the logger for this message.
+        NOTE q is deprecated due to Python's inability to tell the difference between a regular and formatted string at runtime.
         """
-        self.logger.warning(message, stacklevel=self.stacklevel)
+        self._message_template(message, self.logger.info, f, q, t, off)
 
-    def error(self, message, f: bool=False, q: bool=True, t: float=None, off: bool=False):
+    def debug(self, message, f: bool=False, q: bool=True, t: float=None, off: bool=False) -> None:
         """
         f is for formatting with self.asterisk.\n
         q is for automatically putting single quotes around f-string curly brackets
-        NOTE f, t, and off are not implemented for this method. They are only there to prevent programmer errors.
+        t is for pausing the program by a specified number of seconds after the message has been printed to console.\n
+        off turns off the logger for this message.\n
+        NOTE q is deprecated due to Python's inability to tell the difference between a regular and formatted string at runtime.
         """
-        self.logger.error(message, stacklevel=self.stacklevel)
+        self._message_template(message, self.logger.debug, f, q, t, off)
 
-    def critical(self, message, f: bool=False, q: bool=True, t: float=None, off: bool=False):
+    def warning(self, message, f: bool=False, q: bool=True, t: float=None, off: bool=False) -> None:
         """
         f is for formatting with self.asterisk.\n
         q is for automatically putting single quotes around f-string curly brackets
-        NOTE f, t, and off are not implemented for this method. They are only there to prevent programmer errors.
+        t is for pausing the program by a specified number of seconds after the message has been printed to console.\n
+        off turns off the logger for this message.\n
+        NOTE q is deprecated due to Python's inability to tell the difference between a regular and formatted string at runtime.
         """
-        self.logger.critical(message, stacklevel=self.stacklevel)
+        self._message_template(message, self.logger.warning, f, q, t, off)
 
-    def exception(self, message, f: bool=False, q: bool=True, t: float=None, off: bool=False):
+    def error(self, message, f: bool=False, q: bool=True, t: float=None, off: bool=False) -> None:
         """
         f is for formatting with self.asterisk.\n
         q is for automatically putting single quotes around f-string curly brackets
-        NOTE f, t, and off are not implemented for this method. They are only there to prevent programmer errors.
+        t is for pausing the program by a specified number of seconds after the message has been printed to console.\n
+        off turns off the logger for this message.\n
+        NOTE q is deprecated due to Python's inability to tell the difference between a regular and formatted string at runtime.
         """
-        if not off:
-            if not f:
-                self.logger.exception(message, stacklevel=self.stacklevel)
-            else:
-                self.logger.exception(f"{self.asterisk}{message}{self.asterisk}", stacklevel=self.stacklevel)
-            if t:
-                time.sleep(t)
+        self._message_template(message, self.logger.error, f, q, t, off)
+
+    def critical(self, message, f: bool=False, q: bool=True, t: float=None, off: bool=False) -> None:
+        """
+        f is for formatting with self.asterisk.\n
+        q is for automatically putting single quotes around f-string curly brackets
+        t is for pausing the program by a specified number of seconds after the message has been printed to console.\n
+        off turns off the logger for this message.\n
+        NOTE q is deprecated due to Python's inability to tell the difference between a regular and formatted string at runtime.
+        """
+        self._message_template(message, self.logger.critical, f, q, t, off)
+
+    def exception(self, message, f: bool=False, q: bool=True, t: float=None, off: bool=False) -> None:
+        """
+        f is for formatting with self.asterisk.\n
+        q is for automatically putting single quotes around f-string curly brackets
+        t is for pausing the program by a specified number of seconds after the message has been printed to console.\n
+        off turns off the logger for this message.\n
+        NOTE q is deprecated due to Python's inability to tell the difference between a regular and formatted string at runtime.
+        """
+        self._message_template(message, self.logger.exception, f, q, t, off)
 
 ###############################
 
 # Create singletons of the loggers.
 #logger = Logger()
-
