@@ -22,12 +22,12 @@ def delete_empty_files_in(root_folder, file_ending):
         for filename in filenames:
             if filename.endswith(file_ending):
                 file_path = os.path.join(root, filename)
-                if os.path.getsize(file_path) == 0: # 0kb
-                    try:
+                try:
+                    if os.path.getsize(file_path) == 0: # 0kb
                         os.remove(file_path)
                         count += 1
-                    except Exception as e:
-                        print(f"Error deleting file {file_path}: {e}")
-                        continue
+                except Exception as e:
+                    print(f"Error deleting file {file_path}: {e}")
+                    continue
     print(f"Deleted {count} files with '{file_ending}' ending.")
     return
