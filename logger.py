@@ -175,7 +175,7 @@ class Logger:
                  logger_name: str=PROGRAM_NAME,
                  prompt_name: str="prompt_log",
                  batch_id: str=make_id(),
-                 current_time: datetime=_RIGHT_NOW,
+                 current_time: datetime=datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
                  log_level: int=DEFAULT_LOG_LEVEL,
                  stacklevel: int=None
                 ):
