@@ -12,11 +12,12 @@ import os
 # os.walk('C:\dir1\dir2\startdir').next()[2] # returns all the files in 'C:\dir1\dir2\startdir'
 
 # Auto-clean the specified directory of empty files.
-def delete_empty_files_in(root_folder, file_ending):
+def delete_empty_files_in(root_folder, with_ending: str = ".log"):
     """
     Delete empty files (i.e. file size == 0) with the specified ending
     from the every folder under the specified directory.
     """
+    file_ending = with_ending # Syntactic sugar.
     count = 0
     for root, _, filenames in os.walk(root_folder):
         for filename in filenames:

@@ -70,13 +70,19 @@ PROJECT_ROOT = os.path.dirname(script_dir)
 PROGRAM_NAME = os.path.basename(PROJECT_ROOT)
 debug_log_folder = os.path.join(PROJECT_ROOT, "debug_logs")
 
-
 # Clean up debug folders.
-delete_empty_files_in(debug_log_folder, ".log")
-delete_empty_files_in(script_dir, '.Identifier')
+delete_empty_files_in(debug_log_folder, with_ending=".log")
+delete_empty_files_in(script_dir, with_ending='.Identifier')
 max_size_in_megabytes = 200
 delete_logs_if_they_get_too_big_on_disk(debug_log_folder, max_size_in_megabytes)
 delete_empty_folders_in(debug_log_folder)
+
+# Create a folder for current instantiation of the class.
+# This should be created a-new every time the program is run or tested.
+_RIGHT_NOW = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+debug_log_folder = os.path.join(debug_log_folder, _RIGHT_NOW)
+if not os.path.exists(debug_log_folder):
+    os.mkdir(debug_log_folder)
 
 
 # Import DEBUG config
@@ -169,7 +175,7 @@ class Logger:
                  logger_name: str=PROGRAM_NAME,
                  prompt_name: str="prompt_log",
                  batch_id: str=make_id(),
-                 current_time: datetime=datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
+                 current_time: datetime=_RIGHT_NOW,
                  log_level: int=DEFAULT_LOG_LEVEL,
                  stacklevel: int=None
                 ):
