@@ -73,7 +73,6 @@ PROGRAM_NAME = os.path.basename(PROJECT_ROOT)
 debug_log_folder = os.path.join(PROJECT_ROOT, "debug_logs")
 overflow_debug_folder = os.path.join(debug_log_folder, "overflow_debug_logs")
 
-
 # Clean up debug folders.
 delete_empty_files_in(debug_log_folder, with_ending=".log")
 delete_empty_files_in(script_dir, with_ending='.Identifier')
@@ -82,6 +81,13 @@ delete_logs_if_they_get_too_big_on_disk(debug_log_folder, max_size_in_megabytes)
 delete_empty_folders_in(debug_log_folder)
 move_logs_folders_into_this_folder_if_there_are_too_many_of_them(overflow_debug_folder, debug_log_folder, too_many=25)
 
+
+# Create a folder for current instantiation of the class.
+# This should be created a-new every time the program is run or tested.
+_RIGHT_NOW = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+debug_log_folder = os.path.join(debug_log_folder, _RIGHT_NOW)
+if not os.path.exists(debug_log_folder):
+    os.mkdir(debug_log_folder)
 
 # Create a folder for current instantiation of the class.
 # This should be created a-new every time the program is run or tested.
